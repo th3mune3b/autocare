@@ -1,55 +1,126 @@
-import { z } from "zod"
-import { createAdminClient } from "@/lib/supabase/admin"
+﻿import { z } from "zod"
 import { requireRole, type AppRole } from "@/lib/authorization"
+import { createAdminClient } from "@/lib/supabase/admin"
+import { resourceSchemas, financialTotals, type Resource } from "@/lib/workshop-validation"
 
-type Resource="customers"|"vehicles"|"appointments"|"employees"|"repair-jobs"|"parts"|"estimates"|"invoices"|"notifications"
-const resources=new Set<Resource>(["customers","vehicles","appointments","employees","repair-jobs","parts","estimates","invoices","notifications"])
-const uuid=z.string().uuid(), money=z.coerce.number().min(0)
-const schemas:Record<Resource,z.ZodTypeAny>={
-  customers:z.object({fullName:z.string().trim().min(3),email:z.string().email().optional().or(z.literal("")),phone:z.string().trim().min(10),address:z.string().optional(),notes:z.string().optional()}),
-  vehicles:z.object({customerId:uuid,registrationNumber:z.string().min(3),vin:z.string().optional(),make:z.string().min(2),model:z.string().min(1),modelYear:z.coerce.number().int().min(1980).max(2100),color:z.string().optional(),currentMileage:z.coerce.number().int().min(0)}),
-  appointments:z.object({customerId:uuid,vehicleId:uuid,scheduledAt:z.string().min(10),complaint:z.string().min(10),status:z.enum(["pending","confirmed","checked_in","completed","cancelled","no_show"]).default("pending")}),
-  employees:z.object({fullName:z.string().min(3),email:z.string().email(),phone:z.string().min(10),role:z.enum(["staff","mechanic"]),designation:z.string().min(2),specialization:z.string().optional(),hireDate:z.string(),hourlyRate:money}),
-  "repair-jobs":z.object({customerId:uuid,vehicleId:uuid,serviceAdvisorId:uuid,complaint:z.string().min(10),diagnosis:z.string().optional(),priority:z.enum(["low","normal","high","urgent"]).default("normal"),promisedAt:z.string().optional()}),
-  parts:z.object({sku:z.string().min(2),name:z.string().min(2),brand:z.string().optional(),unit:z.string().default("piece"),costPrice:money,salePrice:money,stockOnHand:money,reorderLevel:money}),
-  estimates:z.object({inspectionId:uuid,customerId:uuid,subtotal:money,discount:money.default(0),tax:money.default(0),expiresAt:z.string().optional()}),
-  invoices:z.object({repairJobId:uuid,customerId:uuid,subtotal:money,discount:money.default(0),tax:money.default(0),amountPaid:money.default(0)}),
-  notifications:z.object({userId:uuid,channel:z.enum(["in_app","email"]),type:z.string().min(2),title:z.string().min(2),message:z.string().min(2)}),
+const all: AppRole[] = ["admin","staff","mechanic","customer"]
+const readRoles: Record<Resource, AppRole[]> = {
+ customers:["admin","staff","customer"], vehicles:all, appointments:["admin","staff","customer"], employees:["admin"], "repair-jobs":all,
+ parts:["admin","staff","mechanic"], inspections:["admin","staff"], estimates:["admin","staff","customer"], invoices:["admin","staff","customer"], notifications:all
 }
-const allowed:Record<Resource,AppRole[]>={customers:["admin","staff"],vehicles:["admin","staff","customer"],appointments:["admin","staff","mechanic","customer"],employees:["admin"],"repair-jobs":["admin","staff","mechanic","customer"],parts:["admin","staff","mechanic"],estimates:["admin","staff","customer"],invoices:["admin","staff","customer"],notifications:["admin","staff","mechanic","customer"]}
-const table=(r:Resource)=>r.replace("-","_")
-const select:Record<Resource,string>={customers:"*",vehicles:"*,customers(full_name)",appointments:"*,customers(full_name),vehicles(registration_number,make,model)",employees:"*,profiles(full_name,email,phone,role,status)","repair-jobs":"*,customers(full_name),vehicles(registration_number,make,model)",parts:"*",estimates:"*,customers(full_name)",invoices:"*,customers(full_name),repair_jobs(job_number)",notifications:"*"}
-const camel=(key:string)=>key.replace(/_([a-z])/g,(_,letter)=>letter.toUpperCase())
-function present(r:Resource,row:Record<string,any>){const out:Record<string,any>={};for(const [key,value] of Object.entries(row))if(value===null||typeof value!=="object")out[camel(key)]=value
-  if(r==="vehicles"){out.customerName=row.customers?.full_name;out.vehicle=`${row.make} ${row.model}`}
-  if(r==="appointments"){out.customerName=row.customers?.full_name;out.registrationNumber=row.vehicles?.registration_number;out.vehicle=`${row.vehicles?.make??""} ${row.vehicles?.model??""}`.trim()}
-  if(r==="employees")Object.assign(out,{fullName:row.profiles?.full_name,email:row.profiles?.email,phone:row.profiles?.phone,role:row.profiles?.role,status:row.profiles?.status})
-  if(r==="repair-jobs"){out.customerName=row.customers?.full_name;out.registrationNumber=row.vehicles?.registration_number;out.vehicle=`${row.vehicles?.make??""} ${row.vehicles?.model??""}`.trim()}
-  if(r==="estimates"||r==="invoices")out.customerName=row.customers?.full_name
-  if(r==="invoices")out.jobNumber=row.repair_jobs?.job_number
-  return out}
-function fail(error:unknown,status=400){const message=error instanceof Error?error.message:String((error as {message?:string})?.message??"Request failed");return Response.json({error:message},{status})}
-function code(prefix:string){return `${prefix}-${Date.now().toString(36).toUpperCase()}`}
-async function audit(userId:string,action:string,resource:Resource,id?:string){if(!process.env.SUPABASE_SECRET_KEY)return;const admin=createAdminClient();await admin.from("audit_logs").insert({actor_user_id:userId,action,entity_type:table(resource),entity_id:id??null})}
+const selections: Record<Resource,string> = {
+ customers:"*", vehicles:"*,customers(full_name)", appointments:"*,customers(full_name),vehicles(registration_number,make,model)",
+ employees:"*,profiles(full_name,email,phone,role,status)", "repair-jobs":"*,customers(full_name),vehicles(registration_number,make,model)",
+ parts:"*", inspections:"*,vehicles(registration_number,customer_id)", estimates:"*,customers(full_name)", invoices:"*,customers(full_name),repair_jobs(job_number)", notifications:"*"
+}
+type Row = Record<string, any>
+const table = (r: Resource) => r.replaceAll("-","_")
+const camel = (s:string) => s.replace(/_([a-z])/g, (_,c:string)=>c.toUpperCase())
+function present(r:Resource, row:Row) {
+ const out:Row = {}
+ for (const [k,v] of Object.entries(row)) if (v === null || typeof v !== "object") out[camel(k)] = v
+ if (row.customers) out.customerName = row.customers.full_name
+ if (row.vehicles) {out.registrationNumber=row.vehicles.registration_number;out.vehicle=[row.vehicles.make,row.vehicles.model].filter(Boolean).join(" ");out.customerId ??= row.vehicles.customer_id}
+ if (r==="vehicles") out.vehicle=[row.make,row.model].join(" ")
+ if (r==="employees") Object.assign(out, {fullName:row.profiles?.full_name,email:row.profiles?.email,phone:row.profiles?.phone,role:row.profiles?.role,status:row.profiles?.status})
+ if(row.repair_jobs) out.jobNumber=row.repair_jobs.job_number
+ return out
+}
+function fail(error:unknown,status=400) {return Response.json({error: error instanceof Error ? error.message : (error as Row)?.message ?? String(error)}, {status})}
+function resourceOf(s:string): Resource | null {return Object.hasOwn(resourceSchemas,s) ? s as Resource : null}
+type Context = {params:Promise<{resource:string}>}
+export async function GET(request:Request,{params}:Context) {
+ const r=resourceOf((await params).resource);if(!r)return fail("Unknown resource",404)
+ const auth=await requireRole(readRoles[r]);if(!auth.ok)return fail(auth.error,auth.status)
+ const id=new URL(request.url).searchParams.get("id")
+ if(id&&!z.string().uuid().safeParse(id).success)return fail("Invalid record ID")
+ let q=auth.supabase.from(table(r)).select(selections[r]).order("created_at",{ascending:false}).limit(250)
+ if(id)q=q.eq("id",id)
+ const {data,error}=await q;if(error)return fail(error)
+ return Response.json({records:(data??[]).map(row=>present(r,row)),limit:250})
+}
+async function mutate(request:Request,context:Context,editing:boolean) {
+ try {
+ const r=resourceOf((await context.params).resource);if(!r)return fail("Unknown resource",404)
+ const roles:AppRole[]=r==="employees"?["admin"]:!editing&&["vehicles","appointments"].includes(r)?["admin","staff","customer"]:["admin","staff"]
+ const auth=await requireRole(roles);if(!auth.ok)return fail(auth.error,auth.status)
+ const body=await request.json()
+ const id=editing?z.string().uuid().parse(body.id):null
+ const d=resourceSchemas[r].parse(body) as Row
+ if(auth.account.role==="customer"){
+   const {data,error}=await auth.supabase.from("customers").select("id").eq("profile_id",auth.account.id).single()
+   if(error||!data||d.customerId!==data.id)return fail("Select your own customer account",403)
+   if(r==="appointments")d.status="pending"
+ }
+ if(r==="employees"){
+   if(editing) {
+     const {data,error}=await auth.supabase.rpc("update_employee",{employee_id:id,details:d})
+     if(error)return fail(error)
+     return Response.json({record:present(r,data),message:"Employee updated"})
+   }
+   const admin=createAdminClient()
+   const {data:invited,error}=await admin.auth.admin.inviteUserByEmail(d.email,{data:{full_name:d.fullName,phone:d.phone}})
+   if(error||!invited.user)return fail(error??"Invitation failed")
+   const {error:provisionError}=await admin.rpc("provision_employee",{user_id:invited.user.id,details:d})
+   if(provisionError){await admin.auth.admin.deleteUser(invited.user.id);return fail(provisionError)}
+   const {data:employee,error:readError}=await auth.supabase.from("employees").select(selections.employees).eq("profile_id",invited.user.id).single()
+   if(readError)return fail("Invitation sent; reload employees to check provisioning",503)
+   return Response.json({record:present(r,employee),message:"Employee invited by email"},{status:201})
+ }
+ const payload:Row={}
+ for(const [k,v] of Object.entries(d))payload[k.replace(/[A-Z]/g,c=>"_"+c.toLowerCase())]=v===""?null:v
+ if(["vehicles","appointments","repair-jobs"].includes(r)){
+   const {data,error}=await auth.supabase.from("customers").select("id").eq("id",d.customerId).single()
+   if(error||!data)return fail("Customer is unavailable")
+ }
+ if(r==="appointments"||r==="repair-jobs"){
+   const {data,error}=await auth.supabase.from("vehicles").select("id").eq("id",d.vehicleId).eq("customer_id",d.customerId).single()
+   if(error||!data)return fail("Vehicle must belong to the selected customer")
+ }
+ if(r==="repair-jobs"){
+   const {data,error}=await auth.supabase.from("employees").select("id,profiles!inner(role,status)").eq("id",d.serviceAdvisorId).eq("profiles.role","staff").eq("profiles.status","active").single()
+   if(error||!data)return fail("Select an active service advisor")
+ }
+ if(r==="estimates"){
+   const {data,error}=await auth.supabase.from("inspections").select("id,vehicles!inner(customer_id)").eq("id",d.inspectionId).eq("vehicles.customer_id",d.customerId).single()
+   if(error||!data)return fail("Inspection must belong to the selected customer's vehicle")
+   payload.total=financialTotals(d as any).total
+ }
+ if(r==="invoices"){
+   const {data,error}=await auth.supabase.from("repair_jobs").select("id").eq("id",d.repairJobId).eq("customer_id",d.customerId).single()
+   if(error||!data)return fail("Repair job must belong to the selected customer")
+   Object.assign(payload,financialTotals(d as any))
+   payload.status=payload.balance_due===0?"paid":d.amountPaid>0?"partially_paid":"issued"
+   if(!editing)payload.issued_at=new Date().toISOString()
+ }
+ if(r==="notifications"){
+   const {data,error}=await auth.supabase.from("profiles").select("id").eq("id",d.userId).eq("status","active").single()
+   if(error||!data)return fail("Select an active recipient")
+   if(!editing){payload.status=d.channel==="in_app"?"sent":"queued";payload.sent_at=d.channel==="in_app"?new Date().toISOString():null}
+ }
+ if(r==="inspections"&&!editing)payload.inspected_by=auth.account.id
+ if(r==="vehicles")payload.registration_number=d.registrationNumber.toUpperCase()
+ if(r==="parts")payload.sku=d.sku.toUpperCase()
+ if(!editing){
+   const codes:Partial<Record<Resource,[string,string]>>={customers:["customer_code","CUS"],appointments:["appointment_number","APT"],"repair-jobs":["job_number","JOB"],estimates:["estimate_number","EST"],invoices:["invoice_number","INV"]}
+   const c=codes[r];if(c)payload[c[0]]=c[1]+"-"+crypto.randomUUID().slice(0,8).toUpperCase()
+   if(r==="appointments"){payload.created_by=auth.account.id;payload.source=auth.account.role==="customer"?"customer_portal":"staff"}
+ }
+ const q=editing?auth.supabase.from(table(r)).update(payload).eq("id",id!):auth.supabase.from(table(r)).insert(payload)
+ const {data,error}=await q.select(selections[r]).single()
+ if(error)return fail(error)
+ return Response.json({record:present(r,data),message:editing?"Record updated":"Record created"},{status:editing?200:201})
+ } catch(error) {return fail(error instanceof z.ZodError ? error.issues.map(i=>i.path.join(".")+": "+i.message).join("; ") : error)}
+}
+export const POST=(request:Request,context:Context)=>mutate(request,context,false)
+export const PATCH=(request:Request,context:Context)=>mutate(request,context,true)
+export async function DELETE(request:Request,{params}:Context) {
+ const r=resourceOf((await params).resource);if(!r)return fail("Unknown resource",404)
+ const auth=await requireRole(["admin"]);if(!auth.ok)return fail(auth.error,auth.status)
+ const id=z.string().uuid().safeParse(new URL(request.url).searchParams.get("id"));if(!id.success)return fail("Invalid record ID")
+ if(r==="employees")return fail("Deactivate employee accounts instead of deleting their history",409)
+ const {data,error}=await auth.supabase.from(table(r)).delete().eq("id",id.data).select("id").single()
+ if(error)return fail(error)
+ return Response.json({record:data,message:"Record deleted"})
+}
 
-export async function GET(_:Request,{params}:{params:Promise<{resource:string}>}){const resource=(await params).resource as Resource;if(!resources.has(resource))return fail("Unknown resource",404);const auth=await requireRole(allowed[resource]);if(!auth.ok)return fail(auth.error,auth.status)
-  const {data,error}=await auth.supabase.from(table(resource)).select(select[resource]).order("created_at",{ascending:false}).limit(250);if(error)return fail(error);return Response.json({records:(data??[]).map(row=>present(resource,row as Record<string,any>))})}
-
-export async function POST(request:Request,{params}:{params:Promise<{resource:string}>}){const resource=(await params).resource as Resource;if(!resources.has(resource))return fail("Unknown resource",404);const writeRoles:AppRole[]=resource==="employees"?["admin"]:resource==="vehicles"||resource==="appointments"?["admin","staff","customer"]:["admin","staff"];const auth=await requireRole(writeRoles);if(!auth.ok)return fail(auth.error,auth.status);const parsed=schemas[resource].safeParse(await request.json());if(!parsed.success)return Response.json({error:"Please correct the form",issues:parsed.error.flatten()},{status:400});const d=parsed.data as Record<string,any>
-  try{let payload:Record<string,any>;let result:{id:string}|null=null
-    if(resource==="customers")payload={customer_code:code("CUS"),full_name:d.fullName,email:d.email||null,phone:d.phone,address:d.address||null,notes:d.notes||null}
-    else if(resource==="vehicles"){let customerId=d.customerId;if(auth.account.role==="customer"){const {data}=await auth.supabase.from("customers").select("id").eq("profile_id",auth.account.id).single();if(!data)throw new Error("Customer profile not found");customerId=data.id}payload={customer_id:customerId,registration_number:d.registrationNumber.toUpperCase(),vin:d.vin||null,make:d.make,model:d.model,model_year:d.modelYear,color:d.color||null,current_mileage:d.currentMileage}}
-    else if(resource==="appointments"){let customerId=d.customerId;if(auth.account.role==="customer"){const {data}=await auth.supabase.from("customers").select("id").eq("profile_id",auth.account.id).single();if(!data)throw new Error("Customer profile not found");customerId=data.id}payload={appointment_number:code("APT"),customer_id:customerId,vehicle_id:d.vehicleId,scheduled_at:d.scheduledAt,complaint:d.complaint,status:auth.account.role==="customer"?"pending":d.status,source:auth.account.role==="customer"?"customer_portal":"staff",created_by:auth.account.id}}
-    else if(resource==="employees"){const admin=createAdminClient();const {data:invited,error:inviteError}=await admin.auth.admin.inviteUserByEmail(d.email,{data:{full_name:d.fullName,phone:d.phone}});if(inviteError)throw inviteError;if(!invited.user)throw new Error("Employee invitation failed");await admin.from("customers").delete().eq("profile_id",invited.user.id);const {error:profileError}=await admin.from("profiles").update({full_name:d.fullName,phone:d.phone,role:d.role}).eq("id",invited.user.id);if(profileError)throw profileError;const {data,error}=await admin.from("employees").insert({profile_id:invited.user.id,employee_code:code("EMP"),designation:d.designation,specialization:d.specialization||null,hire_date:d.hireDate,hourly_rate:d.hourlyRate}).select("id").single();if(error)throw error;result=data;await audit(auth.account.id,"invite_employee",resource,result.id);return Response.json({message:"Employee invited by email",record:result},{status:201})}
-    else if(resource==="repair-jobs")payload={job_number:code("JOB"),customer_id:d.customerId,vehicle_id:d.vehicleId,service_advisor_id:d.serviceAdvisorId,complaint:d.complaint,diagnosis:d.diagnosis||null,priority:d.priority,promised_at:d.promisedAt||null}
-    else if(resource==="parts")payload={sku:d.sku.toUpperCase(),name:d.name,brand:d.brand||null,unit:d.unit,cost_price:d.costPrice,sale_price:d.salePrice,stock_on_hand:d.stockOnHand,reorder_level:d.reorderLevel}
-    else if(resource==="estimates"){const total=d.subtotal-d.discount+d.tax;payload={estimate_number:code("EST"),inspection_id:d.inspectionId,customer_id:d.customerId,subtotal:d.subtotal,discount:d.discount,tax:d.tax,total,expires_at:d.expiresAt||null}}
-    else if(resource==="invoices"){const total=d.subtotal-d.discount+d.tax,balance=Math.max(0,total-d.amountPaid);payload={invoice_number:code("INV"),repair_job_id:d.repairJobId,customer_id:d.customerId,subtotal:d.subtotal,discount:d.discount,tax:d.tax,total,amount_paid:d.amountPaid,balance_due:balance,status:d.amountPaid>=total?"paid":d.amountPaid>0?"partially_paid":"issued",issued_at:new Date().toISOString()}}
-    else payload={user_id:d.userId,channel:d.channel,type:d.type,title:d.title,message:d.message,status:d.channel==="in_app"?"sent":"queued",sent_at:d.channel==="in_app"?new Date().toISOString():null}
-    const {data,error}=await auth.supabase.from(table(resource)).insert(payload!).select("id").single();if(error)throw error;result=data;await audit(auth.account.id,"create",resource,result!.id);return Response.json({message:"Record saved to Supabase",record:result},{status:201})
-  }catch(error){return fail(error)}}
-
-export async function PATCH(request:Request,{params}:{params:Promise<{resource:string}>}){const resource=(await params).resource as Resource;if(!resources.has(resource))return fail("Unknown resource",404);const auth=await requireRole(resource==="employees"?["admin"]:["admin","staff"]);if(!auth.ok)return fail(auth.error,auth.status);const body=await request.json() as Record<string,any>;const id=z.string().uuid().safeParse(body.id);if(!id.success)return fail("Invalid record ID");const parsed=(schemas[resource] as z.ZodObject<any>).partial().safeParse(body);if(!parsed.success)return fail("Please correct the form");const d=parsed.data as Record<string,any>;const payload:Record<string,any>={};for(const [key,value] of Object.entries(d)){if(key!=="id")payload[key.replace(/[A-Z]/g,m=>`_${m.toLowerCase()}`)]=value===""?null:value}if(resource==="customers"&&d.fullName)payload.full_name=d.fullName;if(resource==="vehicles"&&d.registrationNumber)payload.registration_number=d.registrationNumber.toUpperCase();delete payload.full_name; if(resource==="customers"&&d.fullName)payload.full_name=d.fullName
-  const {error}=await auth.supabase.from(table(resource)).update(payload).eq("id",id.data);if(error)return fail(error);await audit(auth.account.id,"update",resource,id.data);return Response.json({message:"Record updated"})}
-
-export async function DELETE(request:Request,{params}:{params:Promise<{resource:string}>}){const resource=(await params).resource as Resource;if(!resources.has(resource))return fail("Unknown resource",404);const auth=await requireRole(["admin"]);if(!auth.ok)return fail(auth.error,auth.status);const id=z.string().uuid().safeParse(new URL(request.url).searchParams.get("id"));if(!id.success)return fail("Invalid record ID");const {error}=await auth.supabase.from(table(resource)).delete().eq("id",id.data);if(error)return fail(error);await audit(auth.account.id,"delete",resource,id.data);return Response.json({message:"Record deleted"})}

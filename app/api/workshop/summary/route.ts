@@ -1,5 +1,9 @@
-import { requireRole } from "@/lib/authorization"
-export async function GET(){const auth=await requireRole(["admin","staff","mechanic","customer"]);if(!auth.ok)return Response.json({error:auth.error},{status:auth.status});const db=auth.supabase;const today=new Date(),start=new Date(today.getFullYear(),today.getMonth(),today.getDate()).toISOString(),end=new Date(today.getFullYear(),today.getMonth(),today.getDate()+1).toISOString()
-  const [jobs,bookings,ready,parts,customers,vehicles,invoices]=await Promise.all([
-    db.from("repair_jobs").select("id",{count:"exact",head:true}).not("status","in","(delivered,cancelled)"),db.from("appointments").select("id",{count:"exact",head:true}).gte("scheduled_at",start).lt("scheduled_at",end),db.from("repair_jobs").select("id",{count:"exact",head:true}).eq("status","ready"),db.from("parts").select("stock_on_hand,reorder_level"),db.from("customers").select("id",{count:"exact",head:true}),db.from("vehicles").select("id",{count:"exact",head:true}),db.from("invoices").select("amount_paid")])
-  const error=[jobs,bookings,ready,parts,customers,vehicles,invoices].find(x=>x.error)?.error;if(error)return Response.json({error:error.message},{status:400});return Response.json({activeJobs:jobs.count??0,todaysAppointments:bookings.count??0,readyForDelivery:ready.count??0,lowStock:(parts.data??[]).filter(x=>Number(x.stock_on_hand)<=Number(x.reorder_level)).length,customers:customers.count??0,vehicles:vehicles.count??0,collectedRevenue:(invoices.data??[]).reduce((sum,row)=>sum+Number(row.amount_paid),0)})}
+﻿import { requireRole } from "@/lib/authorization"
+export async function GET() {
+ const auth=await requireRole(["admin","staff","mechanic","customer"])
+ if(!auth.ok)return Response.json({error:auth.error},{status:auth.status})
+ const {data,error}=await auth.supabase.rpc("workshop_summary")
+ if(error)return Response.json({error:"Dashboard totals could not be loaded. Check database migrations and retry."},{status:503})
+ return Response.json(data)
+}
+

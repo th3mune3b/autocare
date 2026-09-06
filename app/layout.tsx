@@ -1,3 +1,4 @@
+import { Toaster } from "@/components/ui/sonner"
 import type { Metadata } from "next";
 import "./globals.css";
 
@@ -17,7 +18,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">{children}<Toaster richColors /></body>
     </html>
   );
 }
