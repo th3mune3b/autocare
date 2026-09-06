@@ -1,0 +1,116 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "../vendor/shadcn-tailwind-4.13.0.css";
+
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+}
+
+@utility scrollbar-none {
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@utility scrollbar-gutter-stable {
+  scrollbar-gutter: stable;
+}
+
+:root {
+  --background: #f5f6f8;
+  --foreground: #182027;
+  --card: #ffffff;
+  --card-foreground: #182027;
+  --popover: #ffffff;
+  --popover-foreground: #182027;
+  --primary: #f15a24;
+  --primary-foreground: #ffffff;
+  --secondary: #202a32;
+  --secondary-foreground: #ffffff;
+  --muted: #eef0f3;
+  --muted-foreground: #66727c;
+  --accent: #fff0e9;
+  --accent-foreground: #b83b10;
+  --destructive: #d93232;
+  --border: #dde1e5;
+  --input: #d6dbe0;
+  --ring: #f15a24;
+  --chart-1: #f15a24;
+  --chart-2: #168f78;
+  --chart-3: #2e79b7;
+  --chart-4: #e0a219;
+  --chart-5: #7758b8;
+  --radius: 0.875rem;
+  --sidebar: #182027;
+  --sidebar-foreground: #f7f8f9;
+  --sidebar-primary: #f15a24;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #27323b;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #ffffff14;
+  --sidebar-ring: #f15a24;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  min-width: 320px;
+}
+
+::selection { background: color-mix(in srgb, var(--primary) 24%, transparent); }
+
+@layer components {
+  .metric-card { @apply rounded-2xl border border-border bg-card p-5 shadow-[0_8px_30px_rgba(22,32,39,.045)] transition-transform duration-200 hover:-translate-y-0.5; }
+  .panel { @apply rounded-2xl border border-border bg-card shadow-[0_8px_30px_rgba(22,32,39,.045)]; }
+  .panel-heading { @apply flex items-center justify-between gap-4 border-b border-border px-5 py-4; }
+  .panel-heading h2 { @apply text-base font-bold tracking-tight; }
+  .panel-heading p { @apply mt-0.5 text-sm text-muted-foreground; }
+  .section-kicker { @apply text-sm font-black uppercase tracking-[.18em] text-primary; }
+  .section-title { @apply mt-4 text-3xl font-black leading-tight tracking-[-.035em] sm:text-4xl; }
+  .section-copy { @apply mt-4 text-base leading-7 text-muted-foreground; }
+  .invoice-label { @apply text-xs font-black uppercase tracking-[.16em] text-muted-foreground; }
+}
