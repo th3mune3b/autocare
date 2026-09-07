@@ -1,4 +1,4 @@
-﻿# AutoCare Pro
+# Auto-Repair Shop
 
 Single-branch workshop management with Next.js App Router, TypeScript, Tailwind, Supabase Auth/PostgreSQL, RLS, and Zod.
 
